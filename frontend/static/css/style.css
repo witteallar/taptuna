@@ -1,0 +1,123 @@
+:root {
+  --bg: #0f1216;
+  --panel: #171c22;
+  --panel-2: #1f262e;
+  --fg: #e6edf3;
+  --muted: #8b95a1;
+  --accent: #4c8dff;
+  --ok: #3fb950;
+  --err: #f85149;
+  --border: #2a323c;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+header h1 { font-size: 16px; margin: 0; letter-spacing: 0.3px; }
+
+.health {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.health.ok  { color: var(--ok); }
+.health.err { color: var(--err); }
+
+main {
+  max-width: 1100px;
+  margin: 24px auto;
+  padding: 0 20px;
+  display: grid;
+  gap: 20px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 18px;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.row select,
+.row input[type=text] {
+  flex: 1;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+}
+.row select { max-width: 60%; }
+
+button {
+  padding: 8px 14px;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:hover { filter: brightness(1.1); }
+button#refresh-captures { background: var(--panel-2); color: var(--fg); border: 1px solid var(--border); }
+
+.status { margin-top: 6px; font-size: 12px; }
+.muted { color: var(--muted); }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+}
+th, td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+th { color: var(--muted); font-weight: 500; }
+tbody tr:hover { background: var(--panel-2); }
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 10px 14px;
+  background: #b62324;
+  color: #fff;
+  border-radius: 6px;
+  font-size: 13px;
+  max-width: 380px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.4);
+}
