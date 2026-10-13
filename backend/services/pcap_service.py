@@ -2,10 +2,12 @@
 
 Ключевые моменты:
 - НЕ используем pyshark: он медленный (парсит структурированный вывод tshark
-  в Python). Нам нужны 6 колонок — берём их напрямую из tshark.
+  в Python). Нам нужны поля — берём их напрямую из tshark.
 - НЕ используем -E quote=d: кавычки вокруг значений ломают int()/float().
   Без quote-флага tshark отдаёт значения как есть.
 - Разделитель задан явно (таб), и код это проверяет по первой строке.
+- tshark (tcp.stream) обычно разделяет соединения, но может склеить
+  переиспользование портов. Добавляем верификацию по SYN/FIN/RST + время.
 """
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ import os
 import shutil
 import subprocess
 import uuid
+from dataclasses import dataclass
 
 import config
 from ..models.session import Session
@@ -20,6 +23,7 @@ from ..utils.errors import ProtocolLabError, TsharkNotFoundError
 
 _CAPTURES: dict[str, dict] = {}
 
+# Поля для tshark: stream, 4-tuple, время, флаги, длина payload
 _FIELDS = (
     "tcp.stream",
     "ip.src",
@@ -28,7 +32,57 @@ _FIELDS = (
     "tcp.dstport",
     "frame.time_epoch",
     "frame.number",
+    "tcp.flags.syn",
+    "tcp.flags.ack",
+    "tcp.flags.fin",
+    "tcp.flags.rst",
+    "tcp.len",
 )
+
+# Ключ 4-tuple для обнаружения переиспользования портов
+@dataclass(frozen=True, slots=True)
+class FourTuple:
+    src_ip: str
+    src_port: int
+    dst_ip: str
+    dst_port: int
+
+    @property
+    def reverse(self) -> FourTuple:
+        return FourTuple(self.dst_ip, self.dst_port, self.src_ip, self.src_port)
+
+
+# Порог времени (сек) для разделения сессий на одном 4-tuple без явного FIN/RST
+SESSION_GAP_THRESHOLD = 30.0
+
+# Флаги TCP (битовая маска)
+SYN_FLAG = 0x02
+ACK_FLAG = 0x10
+FIN_FLAG = 0x01
+RST_FLAG = 0x04
+
+
+def _parse_flags(flags_str: str) -> int:
+    """Парсит строку флагов tshark (например '0x0002' или '2') в int."""
+    if not flags_str:
+        return 0
+    try:
+        if flags_str.startswith("0x"):
+            return int(flags_str, 16)
+        return int(flags_str)
+    except ValueError:
+        return 0
+
+
+def _is_syn_only(flags: int) -> bool:
+    """True если это чистый SYN (SYN=1, ACK=0)."""
+    return (flags & SYN_FLAG) != 0 and (flags & ACK_FLAG) == 0
+
+
+def _is_fin_or_rst(flags: int) -> bool:
+    """True если FIN или RST установлен."""
+    return (flags & (FIN_FLAG | RST_FLAG)) != 0
+
 
 # --- публичные функции ---
 
@@ -125,7 +179,8 @@ def _collect_sessions(path: str) -> list[Session]:
     if lines:
         print("[pcap_service] первая строка repr:", repr(lines[0][:200]))
 
-    buckets: dict[int, dict] = {}
+    # Сначала собираем пакеты по tcp.stream (как сделал tshark)
+    stream_packets: dict[int, list[dict]] = {}
     bad = 0
     no_stream = 0
 
@@ -139,7 +194,9 @@ def _collect_sessions(path: str) -> list[Session]:
                 print("[pcap_service] bad line:", repr(raw[:200]))
             continue
 
-        stream_s, src_ip, sport_s, dst_ip, dport_s, ts_s, _num = parts[:len(_FIELDS)]
+        (stream_s, src_ip, sport_s, dst_ip, dport_s, ts_s, _num,
+         syn_s, ack_s, fin_s, rst_s, tcp_len_s) = parts[:len(_FIELDS)]
+
         if not stream_s:
             no_stream += 1
             continue
@@ -149,35 +206,125 @@ def _collect_sessions(path: str) -> list[Session]:
             sport = int(sport_s)
             dport = int(dport_s)
             ts = float(ts_s)
+            syn = _parse_flags(syn_s)
+            ack = _parse_flags(ack_s)
+            fin = _parse_flags(fin_s)
+            rst = _parse_flags(rst_s)
+            tcp_len = int(tcp_len_s) if tcp_len_s else 0
         except ValueError as e:
             bad += 1
             if bad <= 3:
-                print("[pcap_service] parse err:", repr(raw[:200]), "→", e)
+                print("[pcap_service] parse err:", repr(raw[:200]), "->", e)
             continue
 
-        e = buckets.get(stream)
-        if e is None:
-            buckets[stream] = {
-                "stream": stream,
-                "src_ip": src_ip, "src_port": sport,
-                "dst_ip": dst_ip, "dst_port": dport,
-                "packets": 1, "start_ts": ts, "end_ts": ts,
-            }
-        else:
-            e["packets"] += 1
-            if ts < e["start_ts"]:
-                e["start_ts"] = ts
-            if ts > e["end_ts"]:
-                e["end_ts"] = ts
+        flags = syn | ack | fin | rst
+        pkt = {
+            "stream": stream,
+            "src_ip": src_ip, "src_port": sport,
+            "dst_ip": dst_ip, "dst_port": dport,
+            "ts": ts,
+            "flags": flags,
+            "tcp_len": tcp_len,
+        }
+        stream_packets.setdefault(stream, []).append(pkt)
 
     print(f"[pcap_service] итог: строк={len(lines)} bad={bad} "
-          f"no_stream={no_stream} sessions={len(buckets)}")
+          f"no_stream={no_stream} streams={len(stream_packets)}")
 
-    return _build_sessions(buckets)
+    # Теперь верифицируем: внутри каждого tcp.stream проверяем,
+    # не склеил ли tshark разные соединения на одном 4-tuple
+    sessions_data = _split_streams_by_connection(stream_packets)
+
+    return _build_sessions(sessions_data)
 
 
-def _build_sessions(buckets: dict[int, dict]) -> list[Session]:
-    ordered = sorted(buckets.values(), key=lambda x: (x["start_ts"], x["stream"]))
+def _split_streams_by_connection(
+    stream_packets: dict[int, list[dict]]
+) -> list[dict]:
+    """
+    Разбивает пакеты внутри одного tcp.stream на отдельные соединения,
+    если tshark склеил переиспользование портов.
+    Логика: новое соединение начинается с чистого SYN после FIN/RST
+    или после таймаута SESSION_GAP_THRESHOLD.
+    """
+    result = []
+
+    for stream_idx, packets in stream_packets.items():
+        if not packets:
+            continue
+
+        # Сортируем по времени на всякий случай
+        packets.sort(key=lambda p: p["ts"])
+
+        # Группируем по 4-tuple (учитывая направление)
+        # tshark обычно даёт одинаковый stream для обоих направлений,
+        # но 4-tuple может быть одинаковым для переиспользованных портов
+        current_conn = []
+        last_ts = None
+        last_flags = 0
+        conn_closed = False  # было ли FIN/RST в текущем соединении
+
+        for pkt in packets:
+            four_tuple = FourTuple(
+                pkt["src_ip"], pkt["src_port"],
+                pkt["dst_ip"], pkt["dst_port"]
+            )
+            flags = pkt["flags"]
+            ts = pkt["ts"]
+
+            start_new_conn = False
+
+            if current_conn:
+                # Проверяем, не началось ли новое соединение
+                if _is_syn_only(flags) and conn_closed:
+                    # Чистый SYN после FIN/RST -> новое соединение
+                    start_new_conn = True
+                elif _is_syn_only(flags) and last_ts is not None:
+                    # Чистый SYN после большого промежутка времени
+                    if (ts - last_ts) > SESSION_GAP_THRESHOLD:
+                        start_new_conn = True
+
+            if start_new_conn:
+                # Завершаем текущее соединение
+                if current_conn:
+                    result.append(_conn_to_session_data(stream_idx, current_conn))
+                current_conn = [pkt]
+                conn_closed = False
+            else:
+                current_conn.append(pkt)
+                if _is_fin_or_rst(flags):
+                    conn_closed = True
+
+            last_ts = ts
+            last_flags = flags
+
+        # Последнее соединение в стриме
+        if current_conn:
+            result.append(_conn_to_session_data(stream_idx, current_conn))
+
+    return result
+
+
+def _conn_to_session_data(stream_idx: int, packets: list[dict]) -> dict:
+    """Считает статистику для одного соединения."""
+    first = packets[0]
+    last = packets[-1]
+    # Определяем направление по первому пакету (тот, кто отправил SYN)
+    # Но для простоты используем направление первого пакета
+    return {
+        "stream": stream_idx,
+        "src_ip": first["src_ip"],
+        "src_port": first["src_port"],
+        "dst_ip": first["dst_ip"],
+        "dst_port": first["dst_port"],
+        "packets": len(packets),
+        "start_ts": first["ts"],
+        "end_ts": last["ts"],
+    }
+
+
+def _build_sessions(buckets: list[dict]) -> list[Session]:
+    ordered = sorted(buckets, key=lambda x: (x["start_ts"], x["stream"]))
     result = []
     for e in ordered:
         result.append(Session(

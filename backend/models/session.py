@@ -1,4 +1,10 @@
 from dataclasses import dataclass, asdict
+from enum import Enum
+
+
+class Direction(str, Enum):
+    C2S = "c2s"  # client -> server
+    S2C = "s2c"  # server -> client
 
 
 @dataclass
