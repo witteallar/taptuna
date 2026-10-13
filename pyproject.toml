@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "maturin>=1.0,<2.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taptuna"
+version = "0.1.0"
+description = "Protocol Laboratory"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Alex"}
+]
+dependencies = [
+    "Flask>=3.0.3",
+    "Jinja2>=3.1.2",
+]
+
+[project.scripts]
+taptuna = "taptuna.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.2",
+    "maturin>=1.0,<2.0",
+]
+
+[tool.maturin]
+module = "taptuna._native"
+manifest-path = "taptuna_core/Cargo.toml"
+bindings = ["pyo3"]
+strip-all = true
+debug = false
+release-mode = "auto"
+
+[tool.setuptools.packages.find]
+where = ["taptuna"]

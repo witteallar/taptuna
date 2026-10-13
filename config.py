@@ -5,6 +5,9 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 CAPTURES_DIR = os.path.join(DATA_DIR, "captures")
 PROJECTS_DIR = os.path.join(DATA_DIR, "projects")
 
+# Package name
+PACKAGE_NAME = "taptuna"
+
 HOST = "127.0.0.1"
 PORT = 5000
 
@@ -13,5 +16,5 @@ MAX_PACKETS = 250_000
 TSHARK_TIMEOUT = 60
 PROJECT_VERSION = "1.0"
 
-os.makedirs(CAPTURES_DIR, exist_ok=True)
-os.makedirs(PROJECTS_DIR, exist_ok=True)
+# NOTE: Directories are created only via `taptuna init` command,
+# not at module import time (I7: relative paths, portable projects).
