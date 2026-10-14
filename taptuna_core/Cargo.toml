@@ -12,6 +12,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py311"] }
+sha2 = "0.10"
+thiserror = "1.0"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
